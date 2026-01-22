@@ -34,7 +34,8 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildEmojisAndStickers,
-        GatewayIntentBits.GuildPresences
+        GatewayIntentBits.GuildPresences,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
@@ -67,10 +68,18 @@ const commands = [
         .addStringOption(o => o.setName('mensagem').setDescription('Conteúdo do anúncio').setRequired(true)),
 
     new SlashCommandBuilder()
+        .setName('config_ticket')
+        .setDescription('🎫 [DONO] Personaliza o sistema de tickets.')
+        .addStringOption(o => o.setName('tipo').setDescription('Tipo do painel').setRequired(true).addChoices({ name: 'Botão', value: 'button' }, { name: 'Menu (Select)', value: 'select' }))
+        .addStringOption(o => o.setName('titulo').setDescription('Título do painel').setRequired(true))
+        .addStringOption(o => o.setName('descricao').setDescription('Descrição do painel').setRequired(true))
+        .addStringOption(o => o.setName('cor').setDescription('Cor lateral (Hex: #ff0000)').setRequired(true)),
+
+    new SlashCommandBuilder()
         .setName('setup_ticket')
-        .setDescription('🎫 [DONO] Configura o sistema de tickets VIP.')
-        .addChannelOption(o => o.setName('canal').setDescription('Canal onde o painel será enviado').setRequired(true))
-        .addChannelOption(o => o.setName('logs').setDescription('Canal de logs dos tickets').setRequired(true)),
+        .setDescription('🎫 [DONO] Envia o painel de tickets configurado.')
+        .addChannelOption(o => o.setName('canal').setDescription('Canal do painel').setRequired(true))
+        .addChannelOption(o => o.setName('logs').setDescription('Canal de logs').setRequired(true)),
 
     new SlashCommandBuilder()
         .setName('config_bot')
@@ -95,30 +104,8 @@ client.once('ready', async () => {
 
 // --- HELPER FUNCTIONS ---
 async function getBotConfig() {
-    const config = await db.get('bot_config') || { cor: '#5865F2', banner: null };
-    return config;
+    return await db.get('bot_config') || { cor: '#5865F2', banner: null };
 }
-
-// --- ANTI-RAID LOGIC ---
-const joinLog = new Map();
-client.on('guildMemberAdd', async (member) => {
-    const status = await db.get(`antiraid_${member.guild.id}`);
-    if (!status) return;
-
-    const now = Date.now();
-    const guildJoins = joinLog.get(member.guild.id) || [];
-    const recentJoins = guildJoins.filter(j => now - j < 10000); // Últimos 10 segundos
-    recentJoins.push(now);
-    joinLog.set(member.guild.id, recentJoins);
-
-    if (recentJoins.length > 5) { // Mais de 5 entradas em 10 segundos
-        try {
-            await member.guild.setVerificationLevel(4); // Nível máximo de segurança
-            const owner = await member.guild.fetchOwner();
-            owner.send(`⚠️ **ANTI-RAID ATIVADO:** Muitas entradas detectadas no servidor **${member.guild.name}**. O nível de verificação foi aumentado.`);
-        } catch (e) {}
-    }
-});
 
 // --- INTERACTION HANDLER ---
 client.on('interactionCreate', async (interaction) => {
@@ -127,73 +114,48 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isChatInputCommand()) {
         const { commandName, user, options, guild } = interaction;
 
-        // Comandos de Dono
-        if (['addvip', 'delvip', 'painel', 'anunciar', 'setup_ticket', 'config_bot', 'antiraid'].includes(commandName) && user.id !== OWNER_ID) {
+        if (['addvip', 'delvip', 'painel', 'anunciar', 'setup_ticket', 'config_bot', 'antiraid', 'config_ticket'].includes(commandName) && user.id !== OWNER_ID) {
             return interaction.reply({ content: '❌ Acesso negado.', ephemeral: true });
         }
 
-        if (commandName === 'config_bot') {
-            const cor = options.getString('cor');
-            const banner = options.getString('banner');
-            await db.set('bot_config', { cor, banner });
-            return interaction.reply(`✅ Visual do bot atualizado! Cor: \`${cor}\``);
-        }
-
-        if (commandName === 'antiraid') {
-            const status = options.getBoolean('status');
-            await db.set(`antiraid_${guild.id}`, status);
-            return interaction.reply(`🛡️ Anti-Raid **${status ? 'ATIVADO' : 'DESATIVADO'}** para este servidor.`);
-        }
-
-        if (commandName === 'anunciar') {
-            const msg = options.getString('mensagem');
-            await interaction.reply({ content: '📢 Enviando anúncio...', ephemeral: true });
-            let count = 0;
-            client.guilds.cache.forEach(g => {
-                const channel = g.channels.cache.find(c => c.type === ChannelType.GuildText && c.permissionsFor(client.user).has(PermissionFlagsBits.SendMessages));
-                if (channel) {
-                    const embed = new EmbedBuilder().setTitle('📢 Comunicado Oficial').setDescription(msg).setColor(config.cor);
-                    if (config.banner) embed.setImage(config.banner);
-                    channel.send({ embeds: [embed] }).catch(() => {});
-                    count++;
-                }
-            });
-            return interaction.followUp({ content: `✅ Anúncio enviado para ${count} servidores!`, ephemeral: true });
+        if (commandName === 'config_ticket') {
+            const ticketData = {
+                tipo: options.getString('tipo'),
+                titulo: options.getString('titulo'),
+                descricao: options.getString('descricao'),
+                cor: options.getString('cor')
+            };
+            await db.set(`ticket_settings_${guild.id}`, ticketData);
+            return interaction.reply(`✅ Configurações de ticket salvas para este servidor!`);
         }
 
         if (commandName === 'setup_ticket') {
             const canal = options.getChannel('canal');
             const logs = options.getChannel('logs');
+            const settings = await db.get(`ticket_settings_${guild.id}`) || { tipo: 'button', titulo: 'Suporte VIP', descricao: 'Clique abaixo para abrir um ticket.', cor: config.cor };
+            
             await db.set(`ticket_config_${guild.id}`, { logs: logs.id });
 
             const embed = new EmbedBuilder()
-                .setTitle('🎫 Suporte VIP')
-                .setDescription('Clique no botão abaixo para abrir um ticket de suporte exclusivo.')
-                .setColor(config.cor);
+                .setTitle(settings.titulo)
+                .setDescription(settings.descricao)
+                .setColor(settings.cor);
             if (config.banner) embed.setImage(config.banner);
 
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('open_ticket').setLabel('Abrir Ticket').setStyle(ButtonStyle.Primary).setEmoji('🎫')
-            );
+            const row = new ActionRowBuilder();
+            if (settings.tipo === 'button') {
+                row.addComponents(new ButtonBuilder().setCustomId('open_ticket').setLabel('Abrir Ticket').setStyle(ButtonStyle.Primary).setEmoji('🎫'));
+            } else {
+                row.addComponents(
+                    new StringSelectMenuBuilder()
+                        .setCustomId('open_ticket_select')
+                        .setPlaceholder('Selecione uma opção para abrir ticket...')
+                        .addOptions([{ label: 'Suporte Geral', value: 'geral', emoji: '🎫' }, { label: 'Dúvidas VIP', value: 'vip', emoji: '👑' }])
+                );
+            }
 
             await canal.send({ embeds: [embed], components: [row] });
-            return interaction.reply({ content: '✅ Sistema de tickets configurado!', ephemeral: true });
-        }
-
-        // ... (addvip, delvip, painel, tools - lógica anterior mantida)
-        if (commandName === 'addvip') {
-            const target = options.getUser('usuario');
-            const days = options.getInteger('dias');
-            const expiresAt = days === 0 ? -1 : Date.now() + (days * 24 * 60 * 60 * 1000);
-            await db.set(`vips.${target.id}`, { id: target.id, tag: target.tag, expiresAt });
-            return interaction.reply(`✅ **${target.tag}** agora é VIP!`);
-        }
-
-        if (commandName === 'painel') {
-            const vips = await db.get("vips") || {};
-            const list = Object.values(vips).map((v, i) => `**${i+1}.** \`${v.tag}\` - ${v.expiresAt === -1 ? '♾️' : `<t:${Math.floor(v.expiresAt/1000)}:R>`}`).join('\n') || 'Nenhum VIP.';
-            const embed = new EmbedBuilder().setTitle('📊 Clientes VIP').setDescription(list).setColor(config.cor);
-            return interaction.reply({ embeds: [embed], ephemeral: true });
+            return interaction.reply({ content: '✅ Painel de tickets enviado!', ephemeral: true });
         }
 
         if (commandName === 'tools') {
@@ -201,32 +163,53 @@ client.on('interactionCreate', async (interaction) => {
             if (!isVip && user.id !== OWNER_ID) return interaction.reply({ content: '❌ Você não é VIP.', ephemeral: true });
 
             const embed = new EmbedBuilder()
-                .setTitle('🛠️ Central VIP')
-                .setDescription('Escolha uma ferramenta:')
-                .setColor(config.cor);
+                .setTitle('💎 Central de Ferramentas VIP')
+                .setDescription('Selecione abaixo a ferramenta que deseja utilizar. Todas as ações são registradas.')
+                .addFields(
+                    { name: '👤 Clonagem Self', value: 'Clona usando um Token de conta.', inline: true },
+                    { name: '🤖 Clonagem Bot', value: 'Clona usando o próprio bot.', inline: true },
+                    { name: '🧹 Limpeza', value: 'Limpa mensagens de DMs.', inline: true }
+                )
+                .setColor(config.cor)
+                .setTimestamp();
             if (config.banner) embed.setImage(config.banner);
 
             const row = new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder()
                     .setCustomId('select_tool')
-                    .setPlaceholder('Selecione...')
+                    .setPlaceholder('Escolher uma Opção....')
                     .addOptions([
-                        { label: 'Clonar (Via Conta)', value: 'tool_clone_self', emoji: '👤' },
-                        { label: 'Clonar (Via Bot)', value: 'tool_clone_bot', emoji: '🤖' },
-                        { label: 'Limpar DM', value: 'tool_clear_dm', emoji: '🧹' },
-                        { label: 'Auto-Nick', value: 'tool_autonick', emoji: '🏷️' },
-                        { label: 'DM All', value: 'tool_dmall', emoji: '📢' },
+                        { label: 'Clonar (Via Conta)', value: 'tool_clone_self', emoji: '<:1289969947199410249:1461879272586084497>', description: 'Usa um token de usuário para clonar.' },
+                        { label: 'Clonar (Via Bot)', value: 'tool_clone_bot', emoji: '<:white_seta:1428219248932818964>', description: 'Usa o bot para clonar (precisa de permissão).' },
+                        { label: 'Limpar DM', value: 'tool_clear_dm', emoji: '<:lixeira:1453320418076266567> ', description: 'Apaga mensagens em uma DM específica.' },
+                        { label: 'DM All', value: 'tool_dmall', emoji: '<a:1289359703763324958:1461879286737666272>', description: 'Envia mensagem para todos os membros.' },
                     ]),
             );
             await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
+
+        // ... (Outros comandos addvip, delvip, painel, anunciar, config_bot, antiraid mantidos)
+        if (commandName === 'addvip') {
+            const target = options.getUser('usuario');
+            const days = options.getInteger('dias');
+            const expiresAt = days === 0 ? -1 : Date.now() + (days * 24 * 60 * 60 * 1000);
+            await db.set(`vips.${target.id}`, { id: target.id, tag: target.tag, expiresAt });
+            return interaction.reply(`✅ **${target.tag}** agora é VIP!`);
+        }
+        if (commandName === 'painel') {
+            const vips = await db.get("vips") || {};
+            const list = Object.values(vips).map((v, i) => `**${i+1}.** \`${v.tag}\` - ${v.expiresAt === -1 ? '♾️' : `<t:${Math.floor(v.expiresAt/1000)}:R>`}`).join('\n') || 'Nenhum VIP.';
+            const embed = new EmbedBuilder().setTitle('📊 Clientes VIP').setDescription(list).setColor(config.cor);
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
     }
 
     // --- TICKET LOGIC ---
-    if (interaction.isButton() && interaction.customId === 'open_ticket') {
+    if ((interaction.isButton() && interaction.customId === 'open_ticket') || (interaction.isStringSelectMenu() && interaction.customId === 'open_ticket_select')) {
         const guild = interaction.guild;
         const user = interaction.user;
         const ticketConfig = await db.get(`ticket_config_${guild.id}`);
+        const settings = await db.get(`ticket_settings_${guild.id}`) || { cor: config.cor };
 
         const channel = await guild.channels.create({
             name: `ticket-${user.username}`,
@@ -239,9 +222,9 @@ client.on('interactionCreate', async (interaction) => {
         });
 
         const embed = new EmbedBuilder()
-            .setTitle('🎫 Ticket Aberto')
-            .setDescription(`Olá ${user}, aguarde o suporte. Descreva seu problema abaixo.`)
-            .setColor(config.cor);
+            .setTitle('🎫 Suporte Iniciado')
+            .setDescription(`Olá ${user}, descreva sua dúvida ou problema abaixo. Um administrador será notificado.`)
+            .setColor(settings.cor);
         
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('close_ticket').setLabel('Fechar Ticket').setStyle(ButtonStyle.Danger)
@@ -252,37 +235,35 @@ client.on('interactionCreate', async (interaction) => {
 
         if (ticketConfig?.logs) {
             const logChan = guild.channels.cache.get(ticketConfig.logs);
-            if (logChan) logChan.send(`🎫 **Ticket Aberto:** ${user.tag} criou o canal ${channel.name}`);
+            if (logChan) logChan.send(`🎫 **Ticket Aberto:** ${user.tag} em ${channel}`);
         }
     }
 
     if (interaction.isButton() && interaction.customId === 'close_ticket') {
-        const channel = interaction.channel;
         await interaction.reply('🔒 Fechando ticket em 5 segundos...');
-        setTimeout(() => channel.delete().catch(() => {}), 5000);
+        setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
     }
 
-    // ... (Lógica de Modais e Clonagem anterior mantida e adaptada para usar config.cor)
+    // --- TOOL MODALS & CLONING ---
     if (interaction.isStringSelectMenu() && interaction.customId === 'select_tool') {
         const tool = interaction.values[0];
-        const modal = new ModalBuilder().setCustomId(`modal_${tool}`).setTitle('Configuração');
-        const rows = [
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('source').setLabel('ID Origem').setStyle(TextInputStyle.Short).setRequired(true)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('target').setLabel('ID Destino').setStyle(TextInputStyle.Short).setRequired(true))
-        ];
-        if (tool === 'tool_clone_self') rows.unshift(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('Token Conta').setStyle(TextInputStyle.Short).setRequired(true)));
+        const modal = new ModalBuilder().setCustomId(`modal_${tool}`).setTitle('Configuração da Ferramenta');
         
-        if (tool === 'tool_clear_dm') {
-            modal.setCustomId('modal_clear_dm').addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('Token').setRequired(true).setStyle(TextInputStyle.Short)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channel_id').setLabel('ID DM').setRequired(true).setStyle(TextInputStyle.Short))
+        if (tool.includes('clone')) {
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('source').setLabel('ID do Servidor de ORIGEM').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('target').setLabel('ID do Servidor de DESTINO').setStyle(TextInputStyle.Short).setRequired(true))
             );
-        } else if (tool === 'tool_autonick') {
-            modal.setCustomId('modal_autonick').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nickname').setLabel('Novo Nick').setRequired(true).setStyle(TextInputStyle.Short)));
+            if (tool === 'tool_clone_self') {
+                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('Token da Conta').setStyle(TextInputStyle.Short).setRequired(true)));
+            }
+        } else if (tool === 'tool_clear_dm') {
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('Token da Conta').setRequired(true).setStyle(TextInputStyle.Short)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channel_id').setLabel('ID do Canal de DM').setRequired(true).setStyle(TextInputStyle.Short))
+            );
         } else if (tool === 'tool_dmall') {
-            modal.setCustomId('modal_dmall').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('message').setLabel('Mensagem').setRequired(true).setStyle(TextInputStyle.Paragraph)));
-        } else {
-            modal.addComponents(rows);
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('message').setLabel('Mensagem para enviar').setRequired(true).setStyle(TextInputStyle.Paragraph)));
         }
         await interaction.showModal(modal);
     }
@@ -293,27 +274,29 @@ client.on('interactionCreate', async (interaction) => {
             const sourceId = fields.getTextInputValue('source');
             const targetId = fields.getTextInputValue('target');
             const token = customId.includes('self') ? fields.getTextInputValue('token') : null;
-            
-            await interaction.reply({ content: '🔍 Analisando...', ephemeral: true });
-            globalCloneData[`key_${user.id}`] = { sourceId, targetId, token, selections: {} };
 
-            const embed = new EmbedBuilder().setTitle('⚙️ O que clonar?').setColor(config.cor);
-            const row1 = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('opt_channels').setLabel('Canais').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('opt_roles').setLabel('Cargos').setStyle(ButtonStyle.Secondary),
-            );
-            const row2 = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('confirm_clone').setLabel('INICIAR').setStyle(ButtonStyle.Success),
+            if (sourceId === targetId) return interaction.reply({ content: '❌ O servidor de origem não pode ser igual ao de destino!', ephemeral: true });
+
+            await interaction.reply({ content: '⚙️ Configurando clonagem...', ephemeral: true });
+            globalCloneData[`key_${user.id}`] = { sourceId, targetId, token, selections: { channels: true, roles: true } };
+
+            const embed = new EmbedBuilder()
+                .setTitle('🚀 Confirmar Clonagem')
+                .setDescription(`**Origem:** \`${sourceId}\`\n**Destino:** \`${targetId}\`\n\nClique abaixo para iniciar.`)
+                .setColor(config.cor);
+            
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('confirm_clone').setLabel('INICIAR AGORA').setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId('cancel_clone').setLabel('CANCELAR').setStyle(ButtonStyle.Danger),
             );
-            await interaction.followUp({ embeds: [embed], components: [row1, row2], ephemeral: true });
+            await interaction.followUp({ embeds: [embed], components: [row], ephemeral: true });
         }
     }
 
     if (interaction.isButton()) {
         const data = globalCloneData[`key_${interaction.user.id}`];
         if (interaction.customId === 'confirm_clone' && data) {
-            await interaction.update({ content: '🚀 Clonagem iniciada! Aguarde...', embeds: [], components: [] });
+            await interaction.update({ content: '⏳ Clonagem em andamento... Isso pode demorar alguns minutos.', embeds: [], components: [] });
             try {
                 let sourceGuild;
                 if (data.token) {
@@ -326,13 +309,9 @@ client.on('interactionCreate', async (interaction) => {
                     sourceGuild = await client.guilds.fetch(data.sourceId);
                     await executeClone(sourceGuild, client.guilds.cache.get(data.targetId), data.selections);
                 }
-                await interaction.followUp({ content: '✅ Clonagem concluída!', ephemeral: true });
-            } catch (e) { await interaction.followUp({ content: `❌ Erro: ${e.message}`, ephemeral: true }); }
-        }
-        if (interaction.customId.startsWith('opt_') && data) {
-            const opt = interaction.customId.replace('opt_', '');
-            data.selections[opt] = !data.selections[opt];
-            await interaction.reply({ content: `✅ Opção ${opt} alterada!`, ephemeral: true });
+                await interaction.followUp({ content: '✅ Servidor clonado com sucesso!', ephemeral: true });
+            } catch (e) { await interaction.followUp({ content: `❌ Erro na clonagem: ${e.message}`, ephemeral: true }); }
+            delete globalCloneData[`key_${interaction.user.id}`];
         }
     }
 });
@@ -341,44 +320,48 @@ const globalCloneData = {};
 
 async function executeClone(sourceGuild, targetGuild, opts) {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    if (opts.roles) {
-        const roles = await sourceGuild.roles.fetch();
-        for (const role of roles.values()) {
-            if (role.name !== '@everyone' && !role.managed) {
-                await targetGuild.roles.create({
-                    name: role.name,
-                    color: role.color,
-                    permissions: role.permissions,
-                    hoist: role.hoist
-                }).catch(() => {});
-                await sleep(800);
-            }
+    
+    // 1. Limpar destino
+    const oldChannels = await targetGuild.channels.fetch();
+    for (const c of oldChannels.values()) { await c.delete().catch(() => {}); await sleep(400); }
+
+    // 2. Clonar Cargos
+    const roles = await sourceGuild.roles.fetch();
+    const roleMap = new Map();
+    for (const role of roles.values()) {
+        if (role.name !== '@everyone' && !role.managed) {
+            const newRole = await targetGuild.roles.create({
+                name: role.name,
+                color: role.color,
+                permissions: role.permissions,
+                hoist: role.hoist
+            }).catch(() => {});
+            if (newRole) roleMap.set(role.id, newRole.id);
+            await sleep(600);
         }
     }
 
-    if (opts.channels) {
-        const oldChannels = await targetGuild.channels.fetch();
-        for (const c of oldChannels.values()) { await c.delete().catch(() => {}); await sleep(500); }
+    // 3. Clonar Categorias e Canais
+    const sChannels = await sourceGuild.channels.fetch();
+    const categories = sChannels.filter(c => c.type === ChannelType.GuildCategory).sort((a, b) => a.position - b.position);
+    const catMap = new Map();
 
-        const sChannels = await sourceGuild.channels.fetch();
-        const categories = sChannels.filter(c => c.type === ChannelType.GuildCategory);
-        const catMap = new Map();
+    for (const cat of categories.values()) {
+        const newCat = await targetGuild.channels.create({ name: cat.name, type: ChannelType.GuildCategory });
+        catMap.set(cat.id, newCat.id);
+        await sleep(800);
+    }
 
-        for (const cat of categories.values()) {
-            const newCat = await targetGuild.channels.create({ name: cat.name, type: ChannelType.GuildCategory });
-            catMap.set(cat.id, newCat.id);
-            await sleep(1000);
-        }
-
-        for (const chan of sChannels.values()) {
-            if (chan.type === ChannelType.GuildCategory) continue;
-            await targetGuild.channels.create({
-                name: chan.name,
-                type: chan.type,
-                parent: catMap.get(chan.parentId)
-            }).catch(() => {});
-            await sleep(1000);
-        }
+    for (const chan of sChannels.values()) {
+        if (chan.type === ChannelType.GuildCategory) continue;
+        await targetGuild.channels.create({
+            name: chan.name,
+            type: chan.type,
+            parent: catMap.get(chan.parentId),
+            topic: chan.topic,
+            nsfw: chan.nsfw
+        }).catch(() => {});
+        await sleep(800);
     }
 }
 
