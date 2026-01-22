@@ -177,12 +177,12 @@ client.on('interactionCreate', async (interaction) => {
             const row = new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder()
                     .setCustomId('select_tool')
-                    .setPlaceholder('Escolher uma Opção....')
+                    .setPlaceholder('Escolha uma ferramenta...')
                     .addOptions([
-                        { label: 'Clonar (Via Conta)', value: 'tool_clone_self', emoji: '<:1289969947199410249:1461879272586084497>', description: 'Usa um token de usuário para clonar.' },
-                        { label: 'Clonar (Via Bot)', value: 'tool_clone_bot', emoji: '<:white_seta:1428219248932818964>', description: 'Usa o bot para clonar (precisa de permissão).' },
-                        { label: 'Limpar DM', value: 'tool_clear_dm', emoji: '<:lixeira:1453320418076266567> ', description: 'Apaga mensagens em uma DM específica.' },
-                        { label: 'DM All', value: 'tool_dmall', emoji: '<a:1289359703763324958:1461879286737666272>', description: 'Envia mensagem para todos os membros.' },
+                        { label: 'Clonar (Via Conta)', value: 'tool_clone_self', emoji: '👤', description: 'Usa um token de usuário para clonar.' },
+                        { label: 'Clonar (Via Bot)', value: 'tool_clone_bot', emoji: '🤖', description: 'Usa o bot para clonar (precisa de permissão).' },
+                        { label: 'Limpar DM', value: 'tool_clear_dm', emoji: '🧹', description: 'Apaga mensagens em uma DM específica.' },
+                        { label: 'DM All', value: 'tool_dmall', emoji: '📢', description: 'Envia mensagem para todos os membros.' },
                     ]),
             );
             await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
