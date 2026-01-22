@@ -1,6 +1,6 @@
 {
   "name": "cloner-vip-pro",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Bot de Clonagem VIP com Anti-Raid e Tickets",
   "main": "index.js",
   "scripts": {
@@ -11,6 +11,7 @@
     "discord.js-selfbot-v13": "^3.1.1",
     "quick.db": "^9.1.7",
     "better-sqlite3": "^9.4.3",
-    "dotenv": "^16.4.1"
+    "dotenv": "^16.4.1",
+    "debug": "^4.3.4"
   }
 }
